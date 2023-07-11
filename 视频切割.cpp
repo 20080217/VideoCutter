@@ -1,4 +1,4 @@
-﻿extern "C" {
+extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
@@ -15,6 +15,7 @@
 #include <condition_variable>
 #include <iostream>
 #include <string>
+#include <windows.h>
 //线程池
 class ThreadPool {
 public:
@@ -118,6 +119,8 @@ void print_progress(double percentage) {
     std::cout.flush();
 }
 int main(int argc, char* argv[]) {
+    std::wstring path = L".\\ffmpeg\\";
+    SetDllDirectory(path.c_str());
     // 任务队列
     std::queue<std::function<void()>> tasks;
     // 互斥锁
@@ -194,7 +197,8 @@ int main(int argc, char* argv[]) {
         system("pause");
         return -1; // 无法打开文件
     }
-
+    // 获取开始时间
+    auto start = std::chrono::high_resolution_clock::now();
     // 获取流信息
     if (avformat_find_stream_info(pFormatCtx, nullptr) < 0) {
         return -1; // 无法找到流信息
@@ -269,6 +273,23 @@ int main(int argc, char* argv[]) {
 
             // 是否解码到视频帧
             if (frameFinished) {
+                // 获取当前帧的时间戳
+                int64_t pts = pFrame->pts;
+
+                // 转换时间戳为秒
+                double time = pts * av_q2d(pFormatCtx->streams[videoStream]->time_base);
+
+                // 获取当前时间
+                auto now = std::chrono::high_resolution_clock::now();
+
+                // 计算从开始到现在经过的时间
+                double elapsed = std::chrono::duration<double>(now - start).count();
+
+                // 如果当前帧的显示时间还没有到，就等待
+                if (time > elapsed) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(int((time - elapsed) * 1000)));
+                }
+
                 // 将图像从原始格式转换为 RGB 格式
                 sws_scale(sws_ctx, (uint8_t const* const*)pFrame->data,
                     pFrame->linesize, 0, pCodecCtx->height,
@@ -277,10 +298,12 @@ int main(int argc, char* argv[]) {
                 // 将帧保存到磁盘
                 pool.enqueue([=] { saveJpeg(pFrameRGB, pCodecCtx->width, pCodecCtx->height, frameNumber); });
                 frameNumber++;
+
             }
         }
         av_packet_unref(&packet);
     }
+
 
     // 关闭解码器
     avcodec_close(pCodecCtx);
